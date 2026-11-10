@@ -160,6 +160,10 @@ canvas{position:absolute;left:0;top:0;width:1280px;height:720px;pointer-events:n
 .lite .flock,.lite .dolphin,.lite .splash,.lite .whale,.lite .spout,.lite .rays,.lite .smoke,.lite .shine::after{display:none}
 .lite .card,.lite .frame{box-shadow:none!important}
 .lite .pingd{display:none}
+.lite .boat,.lite .orbit,.lite .sun,.lite .halo,.lite .stars .blink{animation:none}
+#stage.lite.night .ff circle{animation:none;opacity:.85}
+.mob #vignette{transition:none}
+.mob #world{-webkit-backface-visibility:hidden;backface-visibility:hidden}
 
 /* already-visible target: no hide/re-show, just a light sweep */
 .hi .shine::after,.hi.shine::after{animation:shine 1.7s ease .9s both}
@@ -575,8 +579,8 @@ canvas{position:absolute;left:0;top:0;width:1280px;height:720px;pointer-events:n
     return { x: f.x + f.w / 2, y: f.y + h / 2, s: 1280 / f.w * (f.m || 0.95), r: f.r || 0 };
   }
   function tf(c, p) { var s = c.s * (p || 1); return 'translate(640px,360px) rotate(' + (-c.r) + 'deg) scale(' + s + ') translate(' + (-c.x) + 'px,' + (-c.y) + 'px)'; }
-  function applyCam(c) {
-    world.style.transform = tf(c);
+  function applyCam(c, skipWorld) {
+    if (!skipWorld) world.style.transform = tf(c);
     sky.style.transform = tf(c, 1.8);
     var so = lite ? 0 : clamp((0.5 - c.s) / 0.25, 0, 1) * (1 - nightAmt * 0.6);
     sky.style.opacity = so;
@@ -741,7 +745,15 @@ canvas{position:absolute;left:0;top:0;width:1280px;height:720px;pointer-events:n
   }
 
   /* ---------- camera flight ---------- */
+  var GPU = MOBILE && typeof world.animate === 'function';
+  if (GPU) world.style.willChange = 'transform';
+  function camAt(f, e) {
+    var s = Math.exp(Math.log(f.from.s) * (1 - e) + Math.log(f.tgt.s) * e) * (1 - f.k * Math.sin(Math.PI * e));
+    return { x: f.from.x + (f.tgt.x - f.from.x) * e, y: f.from.y + (f.tgt.y - f.from.y) * e, r: f.from.r + (f.tgt.r - f.from.r) * e + f.bank * Math.sin(Math.PI * e), s: s };
+  }
+  function ease(p) { return p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; }
   function fly(tgt, cap, durOverride) {
+    if (flight && flight.anim) { world.style.transform = tf(cur); flight.anim.cancel(); }
     var from = cur;
     var d = Math.hypot(tgt.x - from.x, tgt.y - from.y);
     var sa = Math.min(from.s, tgt.s);
@@ -751,17 +763,25 @@ canvas{position:absolute;left:0;top:0;width:1280px;height:720px;pointer-events:n
     var bank = (!REDUCED && k > 0.08) ? clamp((tgt.x - from.x) / 2500, -1, 1) * 5 : 0;
     if (REDUCED) dur = 600;
     flight = { from: from, tgt: tgt, k: k, bank: bank, dur: dur, t0: performance.now() };
+    if (GPU) {
+      var kf = [], N = 48;
+      for (var i = 0; i <= N; i++) kf.push({ transform: tf(camAt(flight, ease(i / N))) });
+      flight.anim = world.animate(kf, { duration: dur, easing: 'linear', fill: 'forwards' });
+    }
     if (!MOBILE) { world.style.willChange = 'transform'; sky.style.willChange = 'transform'; }
     stage.classList.add('flying');
   }
   function stepFlight(t) {
-    var f = flight, p = Math.min(1, (t - f.t0) / f.dur);
-    var e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-    var s = Math.exp(Math.log(f.from.s) * (1 - e) + Math.log(f.tgt.s) * e) * (1 - f.k * Math.sin(Math.PI * e));
-    cur = { x: f.from.x + (f.tgt.x - f.from.x) * e, y: f.from.y + (f.tgt.y - f.from.y) * e, r: f.from.r + (f.tgt.r - f.from.r) * e + f.bank * Math.sin(Math.PI * e), s: s };
-    applyCam(cur);
+    var f = flight;
+    var el = f.anim ? (Number(f.anim.currentTime) || 0) : (t - f.t0);
+    var p = Math.min(1, el / f.dur);
+    if (f.anim && f.anim.playState === 'finished') p = 1;
+    cur = camAt(f, ease(p));
+    applyCam(cur, !!f.anim);
     if (p >= 1) {
-      cur = f.tgt; applyCam(cur); flight = null; arrivedAt = t;
+      cur = f.tgt; applyCam(cur);
+      if (f.anim) f.anim.cancel();
+      flight = null; arrivedAt = t;
       if (!MOBILE) { world.style.willChange = 'auto'; sky.style.willChange = 'auto'; }
       stage.classList.remove('flying');
     }
